@@ -74,11 +74,26 @@ React state contains setup, permissions, session status, counts, and summaries. 
 
 The app requests the front-facing camera after an explicit user action and never requests microphone access.
 
-New camera frames are obtained with `HTMLVideoElement.requestVideoFrameCallback()`, which follows the video frame rate and supplies presentation metadata. A captured frame receives its ID and monotonic source timestamp before it is sent for inference.
+New camera frames are observed with `HTMLVideoElement.requestVideoFrameCallback()`, which follows the presented video frame rate and supplies presentation metadata. Each accepted frame receives a session-local sequence ID and uses `metadata.mediaTime * 1000` as its source-frame synchronization timestamp. Queueing and inference latency are measured separately with the monotonic `performance.now()` clock. The scheduler does not assume that the callback observes every camera frame.
 
-Inference always uses normalized, unmirrored source-video coordinates. The visible front-camera preview may be mirrored, but mirroring is only a display transform. Frame IDs, timestamps, source dimensions, and display transforms travel with inference results so pose and ball observations can be aligned correctly. Portrait and landscape inputs preserve their aspect ratio through letterboxing rather than stretching; model results are mapped back by removing the letterbox padding.
+Every camera stream has an epoch ID. A frame sent for inference carries its stream epoch, frame ID, source timestamp, and oriented visible source dimensions. Results from an obsolete epoch are discarded so a camera restart, resolution change, or orientation change cannot align an old result with a new preview.
 
-The app stops all camera tracks and releases frame resources when a session ends or the camera screen closes.
+Model adapters convert all outputs into one canonical, unmirrored coordinate system based on the oriented visible source frame. The application does not mirror pixels before inference, so MediaPipe's anatomical left and right remain unchanged when the front-camera preview is mirrored.
+
+Model inputs preserve their aspect ratio rather than being stretched. Each adapter records the exact preprocessing transform used for its frame: source and model dimensions, horizontal and vertical scale, and horizontal and vertical offset. For a letterboxed input, the scale is uniform and the offsets are its padding. The adapter applies the inverse transform to points and all four bounding-box edges, rejects detections that lie only in padding, clamps results to the source bounds, and only then publishes an observation. MediaPipe landmarks are likewise mapped from normalized image coordinates, reversing any crop, rotation, or letterboxing performed by the pose adapter. Preprocessing metadata accompanies raw model output only until this postprocessing is complete, except when retained for diagnostics.
+
+Tracking, velocity, contact regions, and proximity tests use aspect-correct source-height units rather than measuring distance directly in independently normalized `[0, 1]` axes:
+
+```text
+analysisX = sourcePixelX / sourceHeight
+analysisY = sourcePixelY / sourceHeight
+```
+
+This keeps horizontal and vertical distances isotropic for portrait, landscape, and square frames. Domain observations may additionally expose conventional normalized coordinates for interchange, but geometry calculations do not use them directly.
+
+Preview mirroring, `object-fit` cropping or letterboxing, canvas scaling, and viewport rotation are rendering-only transforms. They do not travel with inference results. The rendering layer recalculates the current source-to-canvas transform from the result's source dimensions and the current canvas, fit mode, and mirror setting. This keeps delayed results aligned after a resize and prevents display concerns from entering tracking or contact detection.
+
+When a session ends or the camera screen closes, the app cancels the pending video-frame callback, stops all camera tracks, and explicitly releases pending or transferred frame resources.
 
 ## Vision models
 
@@ -100,7 +115,7 @@ The pretrained model is measured on representative juggling clips using detectio
 
 If the pretrained model misses the MVP accuracy target, it is fine-tuned as a one-class soccer-ball detector using the observed failure cases. Training data then covers varied balls, lighting, backgrounds, devices, motion blur, partial occlusion, small balls, and hard negatives. Dataset splits are separated by recording session rather than adjacent frames.
 
-The detector produces a timestamped normalized bounding box, center point, ball size, and confidence.
+The detector adapter maps model-space output back through its inverse preprocessing transform and produces a timestamped canonical bounding box, center point, ball size, and confidence. Tracking and contact detection consume the aspect-correct coordinates defined above rather than raw model or display coordinates.
 
 ## Inference and concurrency
 

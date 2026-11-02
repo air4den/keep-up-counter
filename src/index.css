@@ -3,9 +3,21 @@
 }
 
 html {
-  font-family: system-ui, sans-serif;
+  font-family: Arial, Helvetica, sans-serif;
+  background: #fff;
 }
 
 body {
+  min-width: 320px;
+  height: 100vh;
+  height: 100dvh;
   margin: 0;
+  overflow: hidden;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
 }
